@@ -267,6 +267,40 @@ if ( $action === 'delete_archive' ) {
 
                             <tr><th colspan="2"><h3><?php echo esc_html__( 'Performance', 'wp-mirror' ); ?></h3></th></tr>
                             <tr>
+                                <th scope="row"><?php echo esc_html__( 'Performance profile', 'wp-mirror' ); ?></th>
+                                <td>
+                                    <select name="<?php echo esc_attr( $opt ); ?>[performance_profile]">
+                                        <option value="safe" <?php selected( (string) $s['performance_profile'], 'safe' ); ?>><?php echo esc_html__( 'Safe (conservative)', 'wp-mirror' ); ?></option>
+                                        <option value="balanced" <?php selected( (string) $s['performance_profile'], 'balanced' ); ?>><?php echo esc_html__( 'Balanced (recommended)', 'wp-mirror' ); ?></option>
+                                        <option value="fast" <?php selected( (string) $s['performance_profile'], 'fast' ); ?>><?php echo esc_html__( 'Fast (high-resource hosts)', 'wp-mirror' ); ?></option>
+                                        <option value="custom" <?php selected( (string) $s['performance_profile'], 'custom' ); ?>><?php echo esc_html__( 'Custom (manual batch values)', 'wp-mirror' ); ?></option>
+                                    </select>
+                                    <p class="description"><?php echo esc_html__( 'Safe/Balanced/Fast automatically apply recommended batch settings on Save.', 'wp-mirror' ); ?></p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><?php echo esc_html__( 'GitHub API guardrails', 'wp-mirror' ); ?></th>
+                                <td>
+                                    <label><?php echo esc_html__( 'Reserve floor (requests)', 'wp-mirror' ); ?>
+                                        <input type="number" min="0" max="2000" name="<?php echo esc_attr( $opt ); ?>[github_api_reserve]" value="<?php echo esc_attr( (int) $s['github_api_reserve'] ); ?>" />
+                                    </label><br/>
+                                    <label><?php echo esc_html__( 'Per-run budget cap (requests)', 'wp-mirror' ); ?>
+                                        <input type="number" min="100" max="5000" name="<?php echo esc_attr( $opt ); ?>[github_api_run_budget]" value="<?php echo esc_attr( (int) $s['github_api_run_budget'] ); ?>" />
+                                    </label>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><?php echo esc_html__( 'Restore safety limits', 'wp-mirror' ); ?></th>
+                                <td>
+                                    <label><?php echo esc_html__( 'Max files in ZIP', 'wp-mirror' ); ?>
+                                        <input type="number" min="1000" max="200000" name="<?php echo esc_attr( $opt ); ?>[restore_max_files]" value="<?php echo esc_attr( (int) $s['restore_max_files'] ); ?>" />
+                                    </label><br/>
+                                    <label><?php echo esc_html__( 'Max uncompressed size (MB)', 'wp-mirror' ); ?>
+                                        <input type="number" min="256" max="10240" name="<?php echo esc_attr( $opt ); ?>[restore_max_unpacked_mb]" value="<?php echo esc_attr( (int) $s['restore_max_unpacked_mb'] ); ?>" />
+                                    </label>
+                                </td>
+                            </tr>
+                            <tr>
                                 <th scope="row"><?php echo esc_html__( 'Batch sizes', 'wp-mirror' ); ?></th>
                                 <td>
                                     <label><?php echo esc_html__( 'URLs per export tick', 'wp-mirror' ); ?>

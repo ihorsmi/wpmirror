@@ -400,16 +400,16 @@ final class WPMirror_Background_Jobs {
         }
 
         if ( $state['stage'] === 'finalize' ) {
+            $this->write_export_artifacts( $export_dir, $state );
             $manifest_path = trailingslashit( wp_normalize_path( $export_dir ) ) . '.wp-mirror-manifest.json';
-            $manifest = $this->build_manifest( $export_dir );
-            file_put_contents( $manifest_path, wp_json_encode( $manifest, JSON_PRETTY_PRINT ) );
-
             $stats = $this->folder_stats( $export_dir );
             $state['export']['result'] = array(
                 'file_count' => $stats['files'],
                 'total_bytes'=> $stats['bytes'],
                 'finished_at'=> time(),
                 'manifest_path' => $manifest_path,
+                'metadata_path' => trailingslashit( wp_normalize_path( $export_dir ) ) . 'export-metadata.json',
+                'checksum_path' => trailingslashit( wp_normalize_path( $export_dir ) ) . 'checksums-sha256.txt',
             );
 
             $this->log( sprintf( 'Export complete. Files: %d, Size: %s', (int) $stats['files'], size_format( (int) $stats['bytes'] ) ) );
@@ -580,6 +580,85 @@ final class WPMirror_Background_Jobs {
         return array( 'files' => $files, 'bytes' => $bytes );
     }
 
+    private function write_export_artifacts( string $export_dir, array $state ) : void {
+        $manifest_path = trailingslashit( wp_normalize_path( $export_dir ) ) . '.wp-mirror-manifest.json';
+        $manifest = $this->build_manifest( $export_dir );
+        file_put_contents( $manifest_path, wp_json_encode( $manifest, JSON_PRETTY_PRINT ) );
+
+        $meta = array(
+            'created_at_gmt' => gmdate( 'c' ),
+            'site_url'       => home_url( '/' ),
+            'wp_version'     => get_bloginfo( 'version' ),
+            'plugin_version' => WP_MIRROR_VERSION,
+            'asset_scope'    => (string) ( $state['export']['asset_scope_mode'] ?? '' ),
+            'profile'        => (string) $this->settings->get_value( 'performance_profile', 'balanced' ),
+            'job_id'         => (string) ( $state['job_id'] ?? '' ),
+            'counts'         => array( 'files' => count( $manifest ) ),
+        );
+
+        $meta_path = trailingslashit( wp_normalize_path( $export_dir ) ) . 'export-metadata.json';
+        file_put_contents( $meta_path, wp_json_encode( $meta, JSON_PRETTY_PRINT ) );
+
+        $checksum_path = trailingslashit( wp_normalize_path( $export_dir ) ) . 'checksums-sha256.txt';
+        $lines = array();
+        foreach ( $manifest as $rel => $m ) {
+            $lines[] = (string) ( $m['sha256'] ?? '' ) . '  ' . $rel;
+        }
+        file_put_contents( $checksum_path, implode( "
+", $lines ) . "
+" );
+    }
+
+    private function estimate_deploy_requests( array $queue, array $deletions, int $batch ) : int {
+        $batch = max( 1, $batch );
+        $items = count( $queue ) + count( $deletions );
+        $blob_requests = count( $queue );
+        $commit_cycles = (int) ceil( $items / $batch );
+        $fixed = 2; // ref + commit fetch
+        return $fixed + $blob_requests + ( $commit_cycles * 3 ); // tree + commit + ref update
+    }
+
+    private function restore_preflight_from_zip( string $archive, int $max_files, int $max_unpacked_mb ) {
+        if ( ! class_exists( 'ZipArchive' ) ) {
+            return new WP_Error( 'wp_mirror_zip_missing', __( 'ZipArchive is not available on this server.', 'wp-mirror' ) );
+        }
+
+        $zip = new ZipArchive();
+        if ( true !== $zip->open( $archive ) ) {
+            return new WP_Error( 'wp_mirror_restore_zip_open', __( 'Failed to open restore archive.', 'wp-mirror' ) );
+        }
+
+        $num = (int) $zip->numFiles;
+        $eligible = 0;
+        $total_uncompressed = 0;
+        for ( $i = 0; $i < $num; $i++ ) {
+            $name = (string) $zip->getNameIndex( $i );
+            if ( $name === '' || substr( $name, -1 ) === '/' ) { continue; }
+            $safe = $this->restore->sanitize_entry_path( $name );
+            if ( is_wp_error( $safe ) ) { continue; }
+            $st = $zip->statIndex( $i );
+            $size = is_array( $st ) && isset( $st['size'] ) ? (int) $st['size'] : 0;
+            $total_uncompressed += max( 0, $size );
+            $eligible++;
+        }
+        $zip->close();
+
+        if ( $eligible > $max_files ) {
+            return new WP_Error( 'wp_mirror_restore_too_many_files', sprintf( __( 'Archive contains too many files (%1$d). Max allowed is %2$d.', 'wp-mirror' ), $eligible, $max_files ) );
+        }
+
+        $limit_bytes = $max_unpacked_mb * 1024 * 1024;
+        if ( $total_uncompressed > $limit_bytes ) {
+            return new WP_Error( 'wp_mirror_restore_too_large', sprintf( __( 'Archive uncompressed size is too large (%1$s). Max allowed is %2$s.', 'wp-mirror' ), size_format( $total_uncompressed ), size_format( $limit_bytes ) ) );
+        }
+
+        return array(
+            'zip_num_files' => $num,
+            'eligible_total' => $eligible,
+            'total_uncompressed' => $total_uncompressed,
+        );
+    }
+
     private function run_deploy_tick( array $state ) : void {
         if ( absint( $state['cancel_requested'] ) === 1 ) {
             $state['status'] = 'cancelled';
@@ -647,6 +726,15 @@ final class WPMirror_Background_Jobs {
             $d['deletions'] = $deletions;
             $d['del_index'] = 0;
 
+            $batch_size = absint( $this->settings->get_value( 'github_batch_files', 15 ) );
+            $estimated_requests = $this->estimate_deploy_requests( $queue, $deletions, $batch_size );
+            $budget_cap = absint( $this->settings->get_value( 'github_api_run_budget', 3000 ) );
+            if ( $estimated_requests > $budget_cap ) {
+                $this->fail( sprintf( __( 'Deploy estimate exceeds configured budget (%1$d > %2$d API requests). Reduce batch scope or increase budget.', 'wp-mirror' ), $estimated_requests, $budget_cap ) );
+                return;
+            }
+            $d['estimated_requests'] = $estimated_requests;
+
             $ref = $this->github->get_branch_ref( $owner, $repo, $branch, $token );
             if ( is_wp_error( $ref ) ) { $this->fail( $ref->get_error_message(), $ref->get_error_data() ); return; }
             list( $code, $headers, $body ) = $ref;
@@ -655,6 +743,24 @@ final class WPMirror_Background_Jobs {
                 $this->fail( __( 'Failed to read branch ref. Ensure branch exists and token has repo permissions.', 'wp-mirror' ), $body );
                 return;
             }
+
+            $reserve = absint( $this->settings->get_value( 'github_api_reserve', 200 ) );
+            $remaining = isset( $headers['x-ratelimit-remaining'] ) ? (int) $headers['x-ratelimit-remaining'] : -1;
+            if ( $remaining >= 0 ) {
+                $required = (int) ( $d['estimated_requests'] ?? 0 );
+                if ( $remaining <= $reserve ) {
+                    $this->fail( sprintf( __( 'GitHub rate-limit remaining (%1$d) is at/below reserve floor (%2$d). Try later.', 'wp-mirror' ), $remaining, $reserve ) );
+                    return;
+                }
+                if ( $required > ( $remaining - $reserve ) ) {
+                    $this->fail( sprintf( __( 'Deploy needs ~%1$d API requests, but only %2$d available above reserve (%3$d).', 'wp-mirror' ), $required, max( 0, $remaining - $reserve ), $reserve ) );
+                    return;
+                }
+                if ( $required > (int) floor( $remaining * 0.7 ) ) {
+                    $this->log( sprintf( 'Warning: deploy estimate %d is above 70%% of current quota (%d).', $required, $remaining ) );
+                }
+            }
+
             $base_commit = (string) $body['object']['sha'];
 
             $commit = $this->github->get_commit( $owner, $repo, $base_commit, $token );
@@ -724,6 +830,13 @@ final class WPMirror_Background_Jobs {
 
                 $abs = trailingslashit( wp_normalize_path( $export_dir ) ) . ltrim( $rel, '/' );
                 if ( ! is_file( $abs ) ) { $d['failed'][] = $rel; continue; }
+
+                $size_bytes = (int) @filesize( $abs );
+                if ( $size_bytes > 90 * 1024 * 1024 ) {
+                    $d['failed'][] = $rel;
+                    $this->log( sprintf( 'Skipped oversized file for GitHub blob API: %s (%s).', $rel, size_format( $size_bytes ) ) );
+                    continue;
+                }
 
                 $data = file_get_contents( $abs );
                 if ( false === $data ) { $d['failed'][] = $rel; continue; }
@@ -932,36 +1045,26 @@ final class WPMirror_Background_Jobs {
                 return;
             }
 
-            $zip = new ZipArchive();
-            if ( true !== $zip->open( $archive ) ) {
-                $this->fail( __( 'Failed to open restore archive.', 'wp-mirror' ) );
+            $max_files = absint( $this->settings->get_value( 'restore_max_files', 50000 ) );
+            $max_unpacked_mb = absint( $this->settings->get_value( 'restore_max_unpacked_mb', 2048 ) );
+            $pf = $this->restore_preflight_from_zip( $archive, $max_files, $max_unpacked_mb );
+            if ( is_wp_error( $pf ) ) {
+                $this->fail( $pf->get_error_message(), $pf->get_error_data() );
                 return;
             }
 
-            $num = (int) $zip->numFiles;
-            $eligible = 0;
-            for ( $i = 0; $i < $num; $i++ ) {
-                $name = (string) $zip->getNameIndex( $i );
-                if ( $name === '' ) { continue; }
-                if ( substr( $name, -1 ) === '/' ) { continue; } // dir
-                $safe = $this->restore->sanitize_entry_path( $name );
-                if ( is_wp_error( $safe ) ) { continue; }
-                $eligible++;
-            }
-            $zip->close();
-
             $state['restore']['tmp_dir'] = $tmp_dir;
-            $state['restore']['zip_num_files'] = $num;
-            $state['restore']['eligible_total'] = $eligible;
+            $state['restore']['zip_num_files'] = (int) $pf['zip_num_files'];
+            $state['restore']['eligible_total'] = (int) $pf['eligible_total'];
             $state['restore']['eligible_done'] = 0;
             $state['restore']['next_index'] = 0;
 
             $state['progress']['current'] = 0;
-            $state['progress']['total'] = max( 1, $eligible );
+            $state['progress']['total'] = max( 1, (int) $pf['eligible_total'] );
             $state['stage'] = 'extract';
             $state['message'] = __( 'Preparing restore (scanned archive).', 'wp-mirror' );
             $this->update_state( $state );
-            $this->log( 'Restore prepare complete. Eligible entries: ' . (string) $eligible );
+            $this->log( 'Restore prepare complete. Eligible entries: ' . (string) $pf['eligible_total'] );
             $this->schedule_tick( 2 );
             return;
         }
@@ -1107,8 +1210,8 @@ final class WPMirror_Background_Jobs {
 
             $stats = $this->folder_stats( $export_dir );
             $state['export']['result'] = array(
-                'file_count'   => (int) ( $stats['file_count'] ?? 0 ),
-                'total_bytes'  => (int) ( $stats['total_bytes'] ?? 0 ),
+                'file_count'   => (int) ( $stats['files'] ?? 0 ),
+                'total_bytes'  => (int) ( $stats['bytes'] ?? 0 ),
                 'manifest_path'=> $manifest_path,
             );
 
@@ -1120,7 +1223,7 @@ final class WPMirror_Background_Jobs {
             return;
         }
     }
-function ajax_status() : void {
+    public function ajax_status() : void {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( array( 'message' => __( 'Forbidden', 'wp-mirror' ) ), 403 );
         }

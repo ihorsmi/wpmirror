@@ -40,6 +40,11 @@ final class WPMirror_Settings {
             'zip_batch_files'         => 200,
             'github_batch_files'      => 15,
             'http_timeout'            => 15,
+            'performance_profile'     => 'balanced', // safe|balanced|fast|custom
+            'github_api_reserve'      => 200,
+            'github_api_run_budget'   => 3000,
+            'restore_max_files'       => 50000,
+            'restore_max_unpacked_mb' => 2048,
         );
     }
 
@@ -98,7 +103,54 @@ final class WPMirror_Settings {
 
         $out['http_timeout'] = isset( $input['http_timeout'] ) ? max( 5, min( 60, absint( $input['http_timeout'] ) ) ) : $defaults['http_timeout'];
 
+        $profile = isset( $input['performance_profile'] ) ? sanitize_text_field( (string) $input['performance_profile'] ) : $defaults['performance_profile'];
+        $allowed_profiles = array( 'safe', 'balanced', 'fast', 'custom' );
+        $out['performance_profile'] = in_array( $profile, $allowed_profiles, true ) ? $profile : 'balanced';
+
+        $out['github_api_reserve'] = isset( $input['github_api_reserve'] ) ? max( 0, min( 2000, absint( $input['github_api_reserve'] ) ) ) : $defaults['github_api_reserve'];
+        $out['github_api_run_budget'] = isset( $input['github_api_run_budget'] ) ? max( 100, min( 5000, absint( $input['github_api_run_budget'] ) ) ) : $defaults['github_api_run_budget'];
+        $out['restore_max_files'] = isset( $input['restore_max_files'] ) ? max( 1000, min( 200000, absint( $input['restore_max_files'] ) ) ) : $defaults['restore_max_files'];
+        $out['restore_max_unpacked_mb'] = isset( $input['restore_max_unpacked_mb'] ) ? max( 256, min( 10240, absint( $input['restore_max_unpacked_mb'] ) ) ) : $defaults['restore_max_unpacked_mb'];
+
+        if ( $out['performance_profile'] !== 'custom' ) {
+            $profiles = $this->performance_profiles();
+            if ( isset( $profiles[ $out['performance_profile'] ] ) ) {
+                $preset = $profiles[ $out['performance_profile'] ];
+                $out['export_batch_urls'] = (int) $preset['export_batch_urls'];
+                $out['asset_batch_files'] = (int) $preset['asset_batch_files'];
+                $out['zip_batch_files'] = (int) $preset['zip_batch_files'];
+                $out['github_batch_files'] = (int) $preset['github_batch_files'];
+                $out['http_timeout'] = (int) $preset['http_timeout'];
+            }
+        }
+
         return wp_parse_args( $out, $defaults );
+    }
+
+    public function performance_profiles() : array {
+        return array(
+            'safe' => array(
+                'export_batch_urls' => 3,
+                'asset_batch_files' => 15,
+                'zip_batch_files'   => 120,
+                'github_batch_files'=> 10,
+                'http_timeout'      => 20,
+            ),
+            'balanced' => array(
+                'export_batch_urls' => 5,
+                'asset_batch_files' => 25,
+                'zip_batch_files'   => 200,
+                'github_batch_files'=> 15,
+                'http_timeout'      => 15,
+            ),
+            'fast' => array(
+                'export_batch_urls' => 12,
+                'asset_batch_files' => 60,
+                'zip_batch_files'   => 600,
+                'github_batch_files'=> 30,
+                'http_timeout'      => 12,
+            ),
+        );
     }
 
     public function get_github_token() : string {
