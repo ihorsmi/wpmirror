@@ -9,6 +9,8 @@ WP Mirror is a production-grade WordPress plugin that exports a dynamic WordPres
 - ✅ Background processing via WP-Cron ticks (prevents long admin requests / 504s)
 - ✅ AJAX progress UI + detailed logs
 - ✅ Manifest-based “skip unchanged” deploys
+- ✅ Generated `search-index.json` for static client-side/hosted search integrations
+- ✅ Generated `.wp-mirror-capabilities.json` deployment/integration capability manifest
 - ✅ No tracking. No phone-home. GPL-compatible
 
 ## Downloads
@@ -50,6 +52,14 @@ In **WP Mirror → Settings** set:
 2. (Optional) Enable ZIP and generate archive
 3. (Optional) Configure GitHub and click **Deploy to GitHub**
 4. Watch progress + logs (UI polls status via AJAX)
+
+## Capability analysis + deployment/integration guide
+
+See [`FEATURES.md`](FEATURES.md) for a capability matrix and implementation guidance for:
+
+- Publishing options (ZIP, local directory, SFTP workflows, GitHub-driven host integrations)
+- "Static but still functional" patterns for comments, forms, and search
+- Generated artifacts: `search-index.json` and `.wp-mirror-capabilities.json`
 
 ## GitHub Pages notes
 

@@ -4,7 +4,7 @@ Tags: static site, export, github pages, deployment, performance, security
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.0.3.1
+Stable tag: 1.0.3.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
 
@@ -19,6 +19,8 @@ WP Mirror generates a static copy of your WordPress site:
 * Copies only the assets needed for your exported pages (Referenced-only mode), including CSS url() and @import dependencies.
 * Optionally creates a ZIP archive for backups (downloadable from the WP Mirror admin screen).
 * Optionally deploys the exported directory to GitHub using a background, batched workflow and a local manifest for skip-unchanged deploys.
+* Generates `search-index.json` from published posts/pages to support static search patterns (Fuse.js or hosted search pipelines).
+* Generates `.wp-mirror-capabilities.json` documenting deployment target patterns and integration guidance.
 
 No tracking. No phone-home. WP Mirror only talks to GitHub when you explicitly click Deploy.
 
@@ -43,6 +45,22 @@ Background processing: exports, ZIP creation, and GitHub deploy run via single W
 5. If "Clean remote removed files" is enabled, tick the confirmation checkbox on the Deploy form.
 5. Click Deploy to GitHub.
 
+
+= How can I publish to hosts like Cloudflare Pages, Netlify, S3, Bunny, or others? =
+
+WP Mirror provides ZIP export, local export directory output, and GitHub deploy. You can publish to many static hosts by either:
+
+1. Uploading ZIP/export output directly (including SFTP workflows), or
+2. Using GitHub deploy and connecting your host to that repository/branch.
+
+See `FEATURES.md` in the plugin repository for deployment pattern details.
+
+= How do I add search/comments/forms to a static export? =
+
+- Search: use generated `search-index.json` with Fuse.js (client-side) or as a feed for hosted search systems (e.g., Algolia).
+- Comments: embed an external comments provider script.
+- Forms: post to external form endpoints/webhooks (for example, Formspree).
+
 = How do I keep file count small? =
 
 Use Referenced-only mode. WP Mirror will copy only assets referenced by exported HTML and CSS dependencies.
@@ -56,6 +74,10 @@ No. WP Mirror never copies PHP files into exports or ZIPs, and skips PHP during 
 Yes. Jobs are broken into small background ticks via WP-Cron. The admin page starts a job and returns immediately.
 
 == Changelog ==
+
+= 1.0.3.2 =
+* Added: generated `search-index.json` during export for static search integrations.
+* Added: generated `.wp-mirror-capabilities.json` during export documenting deployment/integration patterns.
 
 = 1.0.3.1 =
 * Fix: plugin activation error caused by an accidental stray modifier in the background jobs class.

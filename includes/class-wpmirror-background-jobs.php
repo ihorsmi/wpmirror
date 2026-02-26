@@ -404,12 +404,22 @@ final class WPMirror_Background_Jobs {
             $manifest = $this->build_manifest( $export_dir );
             file_put_contents( $manifest_path, wp_json_encode( $manifest, JSON_PRETTY_PRINT ) );
 
+            $search_index_path = trailingslashit( wp_normalize_path( $export_dir ) ) . 'search-index.json';
+            $search_index      = $this->build_search_index( $public_base_url );
+            file_put_contents( $search_index_path, wp_json_encode( $search_index, JSON_PRETTY_PRINT ) );
+
+            $capabilities_path = trailingslashit( wp_normalize_path( $export_dir ) ) . '.wp-mirror-capabilities.json';
+            $capabilities      = $this->build_capabilities_manifest( $public_base_url );
+            file_put_contents( $capabilities_path, wp_json_encode( $capabilities, JSON_PRETTY_PRINT ) );
+
             $stats = $this->folder_stats( $export_dir );
             $state['export']['result'] = array(
                 'file_count' => $stats['files'],
                 'total_bytes'=> $stats['bytes'],
                 'finished_at'=> time(),
                 'manifest_path' => $manifest_path,
+                'search_index_path' => $search_index_path,
+                'capabilities_path' => $capabilities_path,
             );
 
             $this->log( sprintf( 'Export complete. Files: %d, Size: %s', (int) $stats['files'], size_format( (int) $stats['bytes'] ) ) );
@@ -502,6 +512,101 @@ final class WPMirror_Background_Jobs {
             $rel_in_wp = ltrim( $rel_in_wp, '/' );
             $this->enqueue_dir_assets( $td, $rel_in_wp, $export_dir, $state, $ignore_patterns, $ignore_enabled );
         }
+    }
+
+    private function build_search_index( string $public_base_url ) : array {
+        $ids = get_posts( array(
+            'post_type'              => array( 'post', 'page' ),
+            'post_status'            => 'publish',
+            'numberposts'            => -1,
+            'fields'                 => 'ids',
+            'no_found_rows'          => true,
+            'update_post_meta_cache' => false,
+            'update_post_term_cache' => false,
+        ) );
+
+        if ( ! is_array( $ids ) ) {
+            return array();
+        }
+
+        $index = array();
+        foreach ( $ids as $id ) {
+            $post = get_post( (int) $id );
+            if ( ! ( $post instanceof WP_Post ) ) { continue; }
+
+            $raw_url = (string) get_permalink( (int) $id );
+            if ( $raw_url === '' ) { continue; }
+
+            $excerpt = has_excerpt( $post ) ? get_the_excerpt( $post ) : wp_trim_words( wp_strip_all_tags( (string) $post->post_content ), 40 );
+
+            $index[] = array(
+                'id'      => (int) $id,
+                'type'    => (string) $post->post_type,
+                'title'   => wp_strip_all_tags( (string) get_the_title( $post ) ),
+                'url'     => $this->to_public_url( $raw_url, $public_base_url ),
+                'excerpt' => wp_strip_all_tags( (string) $excerpt ),
+                'date_gmt'=> (string) $post->post_date_gmt,
+            );
+        }
+
+        return $index;
+    }
+
+    private function to_public_url( string $url, string $public_base_url ) : string {
+        $url = trim( $url );
+        if ( $url === '' ) {
+            return '';
+        }
+
+        $from = untrailingslashit( home_url( '/' ) );
+        $to   = untrailingslashit( trim( $public_base_url ) );
+        if ( $from === '' || $to === '' ) {
+            return $url;
+        }
+
+        if ( strpos( $url, $from ) === 0 ) {
+            return $to . substr( $url, strlen( $from ) );
+        }
+
+        return $url;
+    }
+
+    private function build_capabilities_manifest( string $public_base_url ) : array {
+        return array(
+            'generated_at' => gmdate( 'c' ),
+            'public_base_url' => $public_base_url,
+            'publishing' => array(
+                'one_click_export' => true,
+                'targets' => array(
+                    'zip_export',
+                    'local_directory',
+                    'sftp',
+                    'github_pages',
+                    'cloudflare_pages_via_github',
+                    'netlify_via_github',
+                    'aws_s3',
+                    'bunny_cdn',
+                    'digitalocean_app_platform',
+                    'kinsta_static_site_hosting',
+                    'tiiny_host',
+                ),
+            ),
+            'dynamic_integrations' => array(
+                'comments' => array(
+                    'supported_via_external_embed' => true,
+                    'notes' => 'Use an external comments provider embed script on exported pages.',
+                ),
+                'forms' => array(
+                    'supported_via_external_endpoint' => true,
+                    'example_patterns' => array( 'Fluent Forms + Formspree', 'Webhook endpoints', 'Third-party form backends' ),
+                ),
+                'search' => array(
+                    'fusejs_client_side' => true,
+                    'algolia_hosted' => true,
+                    'search_index_file' => 'search-index.json',
+                ),
+            ),
+        );
     }
 
     private function enqueue_dir_assets( string $src_dir_abs, string $rel_root_under_wp, string $export_dir, array &$state, array $ignore_patterns, bool $ignore_enabled ) : void {

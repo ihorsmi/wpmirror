@@ -3,7 +3,7 @@
  * Plugin Name:       WP Mirror
  * Plugin URI:        https://github.com/example/wp-mirror
  * Description:       Export your WordPress site as a self-contained static site, optionally create ZIP archives, and deploy to GitHub (GitHub Pages compatible).
- * Version:           1.0.3.1
+ * Version:           1.0.3.2
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            WP Mirror Contributors
@@ -23,7 +23,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'WP_MIRROR_VERSION', '1.0.3.1' );
+define( 'WP_MIRROR_VERSION', '1.0.3.2' );
 define( 'WP_MIRROR_SLUG', 'wp-mirror' );
 define( 'WP_MIRROR_TEXT_DOMAIN', 'wp-mirror' );
 define( 'WP_MIRROR_PLUGIN_FILE', __FILE__ );
